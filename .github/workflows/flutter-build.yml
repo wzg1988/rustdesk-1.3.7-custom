@@ -98,8 +98,8 @@ jobs:
     needs: [generate-bridge, build-RustDeskTempTopMostWindow]
     runs-on: windows-2022
     env:
-      VCPKG_DEFAULT_TRIPLET: x64-windows
-      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -172,10 +172,25 @@ jobs:
           if (!(Test-Path $perl)) {
             throw "Strawberry Perl was not installed correctly: $perl"
           }
+          $nasmCandidates = @(
+            "C:\Program Files\NASM\nasm.exe",
+            "C:\ProgramData\chocolatey\bin\nasm.exe"
+          )
+          $nasm = $nasmCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (!$nasm) {
+            throw "NASM was not installed correctly. Checked: $($nasmCandidates -join ', ')"
+          }
+
+          # GITHUB_PATH only affects subsequent steps, so also update PATH in this step.
+          $nasmDir = Split-Path -Parent $nasm
+          $env:PATH = "C:\Strawberry\perl\bin;$nasmDir;C:\ProgramData\chocolatey\bin;$env:PATH"
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Strawberry\perl\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $nasmDir
           Add-Content -Path $env:GITHUB_PATH -Value "C:\ProgramData\chocolatey\bin"
+
           & $perl -v
-          nasm -v
+          & $nasm -v
+          Write-Host "NASM executable: $nasm"
 
       - name: Install vcpkg dependencies
         shell: bash

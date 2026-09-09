@@ -153,6 +153,18 @@ jobs:
         with:
           prefix-key: windows-2022-x64
 
+      # The pinned vcpkg snapshot used by RustDesk 1.3.7 may try to
+      # download MSYS2 Perl when Perl is absent. Some MSYS mirrors now return
+      # 404 for the old runtime package, which is the actual fatal error seen
+      # in the previous logs. Install native runner tools first so the AOM
+      # portfile finds them locally and does not download MSYS2.
+      - name: Install vcpkg build prerequisites
+        shell: powershell
+        run: |
+          choco install nasm strawberryperl -y --no-progress
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\ProgramData\chocolatey\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Strawberry\perl\bin"
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:

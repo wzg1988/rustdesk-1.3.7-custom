@@ -1,27 +1,23 @@
-# This yaml shares the build bridge steps with ci and nightly.
+# RustDesk 1.3.7 - Flutter/Rust bridge generator
+# Windows x64 workflow companion.
+# Fixes the stale rustdesk-org/request git revision recorded in Cargo.lock.
+
 name: Build flutter-rust-bridge
-# 2023-11-23 18:00:00+00:00
 
 on:
   workflow_call:
+  workflow_dispatch:
 
 env:
   FLUTTER_VERSION: "3.22.3"
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
-  RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503
+  RUST_VERSION: "1.75"
 
 jobs:
   generate_bridge:
-    runs-on: ${{ matrix.job.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        job:
-          - {
-              target: x86_64-unknown-linux-gnu,
-              os: ubuntu-20.04,
-              extra-build-args: "",
-            }
+    name: generate_bridge (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -29,19 +25,20 @@ jobs:
           submodules: recursive
 
       - name: Install prerequisites
+        shell: bash
         run: |
-          sudo apt-get install ca-certificates -y
           sudo apt-get update -y
           sudo apt-get install -y \
+            ca-certificates \
             clang \
             cmake \
             curl \
             gcc \
-            git \
             g++ \
-            libclang-10-dev \
+            git \
+            libclang-dev \
             libgtk-3-dev \
-            llvm-10-dev \
+            llvm-dev \
             nasm \
             ninja-build \
             pkg-config \
@@ -51,40 +48,95 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: ${{ matrix.job.target }}
-          components: "rustfmt"
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: bridge-${{ matrix.job.os }}
+          prefix-key: bridge-ubuntu-22.04-v2
 
-      - name: Cache Bridge
+      - name: Cache generated bridge
         id: cache-bridge
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /tmp/flutter_rust_bridge
-          key: vcpkg-${{ matrix.job.arch }}
+          key: rustdesk-1.3.7-bridge-ubuntu-22.04-v2
 
-      - name: Install flutter
+      - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: "stable"
+          channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
-      - name: Install flutter rust bridge deps
+      - name: Install flutter rust bridge dependencies
         shell: bash
         run: |
-          cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
-          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
+          cargo install flutter_rust_bridge_codegen \
+            --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} \
+            --features "uuid" \
+            --locked
 
-      - name: Run flutter rust bridge
+          pushd flutter
+          sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml
+          flutter pub get
+          popd
+
+      # RustDesk 1.3.7's old Cargo.lock can contain a git SHA for
+      # rustdesk-org/request that no longer exists on the remote.
+      # Refresh only that package before flutter_rust_bridge invokes
+      # cargo metadata.
+      - name: Refresh stale Rust git dependency
+        shell: bash
         run: |
-          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
-          cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+          set -euxo pipefail
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@master
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+          # Remove only cached checkouts/databases for the affected repository.
+          rm -rf ~/.cargo/git/checkouts/request-* || true
+          rm -rf ~/.cargo/git/db/request-* || true
+
+          # The failing log identifies this dependency package as "request".
+          # Updating it replaces the deleted SHA from Cargo.lock with a ref
+          # currently available from the repository.
+          cargo update -p request
+
+          echo "Updated request dependency:"
+          grep -n -A8 -B2 'name = "request"' Cargo.lock || true
+
+      - name: Verify Cargo metadata
+        shell: bash
+        run: |
+          cargo metadata --format-version 1 --no-deps > /tmp/rustdesk-cargo-metadata.json
+          test -s /tmp/rustdesk-cargo-metadata.json
+
+      - name: Generate Flutter/Rust bridge
+        shell: bash
+        run: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+
+          cp \
+            ./flutter/macos/Runner/bridge_generated.h \
+            ./flutter/ios/Runner/bridge_generated.h
+
+      - name: Verify generated files
+        shell: bash
+        run: |
+          test -f ./src/bridge_generated.rs
+          test -f ./src/bridge_generated.io.rs
+          test -f ./flutter/lib/generated_bridge.dart
+          test -f ./flutter/lib/generated_bridge.freezed.dart
+          test -f ./flutter/macos/Runner/bridge_generated.h
+          test -f ./flutter/ios/Runner/bridge_generated.h
+
+      - name: Upload bridge artifact
+        uses: actions/upload-artifact@v4
         with:
           name: bridge-artifact
           path: |
@@ -94,3 +146,4 @@ jobs:
             ./flutter/lib/generated_bridge.freezed.dart
             ./flutter/macos/Runner/bridge_generated.h
             ./flutter/ios/Runner/bridge_generated.h
+          if-no-files-found: error

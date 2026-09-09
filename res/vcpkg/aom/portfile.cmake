@@ -1,43 +1,13 @@
-# AOM requires NASM on x64 Windows.
+# AOM port override for GitHub Actions Windows builds.
 #
-# GitHub Actions + Chocolatey can install NASM successfully while the executable
-# is not visible through PATH and no Chocolatey shim is created for the current
-# process. Therefore search the actual Chocolatey package directory as well as
-# the normal shim directory.
-set(_aom_nasm_hints
-    "C:/ProgramData/chocolatey/bin"
-    "C:/ProgramData/chocolatey/lib/nasm/tools"
-    "C:/ProgramData/chocolatey/lib/nasm.portable/tools"
-)
-
-find_program(NASM
-    NAMES nasm.exe nasm
-    HINTS ${_aom_nasm_hints}
-)
-
-if(NOT NASM)
-    file(GLOB_RECURSE _aom_nasm_candidates
-        LIST_DIRECTORIES false
-        "C:/ProgramData/chocolatey/lib/nasm*/tools/nasm.exe"
-        "C:/ProgramData/chocolatey/lib/nasm*/tools/**/nasm.exe"
-        "C:/ProgramData/chocolatey/lib/nasm*/**/nasm.exe"
-    )
-    list(LENGTH _aom_nasm_candidates _aom_nasm_count)
-    if(_aom_nasm_count GREATER 0)
-        list(GET _aom_nasm_candidates 0 NASM)
-    endif()
-endif()
-
-if(NOT NASM)
-    message(FATAL_ERROR
-        "Could not find NASM after checking Chocolatey shims and package directories.")
-endif()
-
-get_filename_component(_aom_nasm_dir "${NASM}" DIRECTORY)
-vcpkg_add_to_path("${_aom_nasm_dir}")
-
-# Perl is required by AOM. Prefer native Strawberry Perl and avoid vcpkg's old
-# MSYS2 acquisition path.
+# Do not require NASM on Windows. The CI runner repeatedly reports that NASM
+# cannot be located even after installation. Building AOM with the generic CPU
+# target disables the x86 assembly path and therefore removes the NASM
+# dependency. This is slower than an optimized SIMD build, but is portable and
+# suitable for producing the Windows package.
+#
+# Perl is still required by parts of the AOM build tooling. Prefer a native
+# Strawberry Perl installation and avoid vcpkg's old MSYS2 acquisition path.
 find_program(PERL
     NAMES perl.exe perl
     HINTS
@@ -47,19 +17,8 @@ find_program(PERL
 )
 
 if(NOT PERL)
-    file(GLOB_RECURSE _aom_perl_candidates
-        LIST_DIRECTORIES false
-        "C:/ProgramData/chocolatey/lib/strawberryperl*/**/perl.exe"
-    )
-    list(LENGTH _aom_perl_candidates _aom_perl_count)
-    if(_aom_perl_count GREATER 0)
-        list(GET _aom_perl_candidates 0 PERL)
-    endif()
-endif()
-
-if(NOT PERL)
     message(FATAL_ERROR
-        "Could not find Perl. Install Strawberry Perl before building AOM.")
+        "Could not find native Perl. Install Strawberry Perl before building AOM.")
 endif()
 
 get_filename_component(_aom_perl_dir "${PERL}" DIRECTORY)
@@ -86,12 +45,14 @@ else()
     )
 endif()
 
+# Force the generic implementation on Windows so AOM does not enter the x86
+# assembly/NASM configuration path.
 set(aom_target_cpu "")
-if(VCPKG_TARGET_IS_UWP OR (VCPKG_TARGET_IS_WINDOWS AND VCPKG_TARGET_ARCHITECTURE MATCHES "^arm"))
+if(VCPKG_TARGET_IS_WINDOWS)
     set(aom_target_cpu "-DAOM_TARGET_CPU=generic")
-endif()
-
-if(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm" AND VCPKG_TARGET_IS_LINUX)
+elseif(VCPKG_TARGET_IS_UWP)
+    set(aom_target_cpu "-DAOM_TARGET_CPU=generic")
+elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm" AND VCPKG_TARGET_IS_LINUX)
     set(aom_target_cpu "-DENABLE_NEON=OFF")
 endif()
 
@@ -107,9 +68,10 @@ vcpkg_cmake_configure(
 )
 
 vcpkg_cmake_install()
-vcpkg_copy_pdbs()
-vcpkg_fixup_pkgconfig()
 
+vcpkg_copy_pdbs()
+
+vcpkg_fixup_pkgconfig()
 if(VCPKG_TARGET_IS_WINDOWS)
     vcpkg_replace_string("${CURRENT_PACKAGES_DIR}/lib/pkgconfig/aom.pc" " -lm" "")
     if(NOT VCPKG_BUILD_TYPE)

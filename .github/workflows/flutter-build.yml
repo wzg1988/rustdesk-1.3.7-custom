@@ -17,7 +17,6 @@ env:
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
   TAG_NAME: "${{ inputs.upload-tag }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  VCPKG_COMMIT_ID: "b2cb0da531c2f1f740045bfe7c4dac59f0b2b69c"
   VERSION: "1.3.7"
   RS_PUB_KEY: "${{ secrets.KEY }}"
   RENDEZVOUS_SERVER: "${{ secrets.RENDEZVOUS_SERVER }}"
@@ -97,6 +96,9 @@ jobs:
     name: Windows x64
     needs: [generate-bridge, build-RustDeskTempTopMostWindow]
     runs-on: windows-2022
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -134,7 +136,7 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
           Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
           $enginePath = "C:\hostedtoolcache\windows\flutter\stable-${{ env.FLUTTER_VERSION }}-x64\bin\cache\artifacts\engine\windows-x64-release"
-          Move-Item -Force windows-x64-release\* $enginePath
+          Copy-Item -Force -Recurse windows-x64-release\* $enginePath
 
       - name: Patch Flutter
         shell: bash
@@ -157,16 +159,26 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgDirectory: C:\vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
 
       - name: Install vcpkg dependencies
-        shell: bash
+        shell: powershell
         run: |
-          if ! $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"; then
-            find "${VCPKG_ROOT}/" -name "*.log" | while read -r f; do cat "$f"; done
-            exit 1
-          fi
+          $ErrorActionPreference = "Stop"
+          & "C:\vcpkg\vcpkg.exe" version
+          & "C:\vcpkg\vcpkg.exe" install `
+            --triplet x64-windows `
+            --x-install-root "C:\vcpkg\installed"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "========== vcpkg build logs =========="
+            Get-ChildItem -Path "C:\vcpkg\buildtrees" -Recurse -Include *.log -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host "========== $($_.FullName) =========="
+                Get-Content $_.FullName -ErrorAction SilentlyContinue
+              }
+            exit $LASTEXITCODE
+          }
 
       - name: Build RustDesk Windows x64
         shell: powershell

@@ -1,19 +1,15 @@
-# NASM is required to build AOM
-vcpkg_find_acquire_program(NASM)
-get_filename_component(NASM_EXE_PATH ${NASM} DIRECTORY)
-vcpkg_add_to_path(${NASM_EXE_PATH})
+# NASM is required to build AOM.
+# Use the Windows-native NASM installed by the GitHub Actions workflow instead
+# of vcpkg_find_acquire_program(), because the RustDesk 1.3.7 pinned vcpkg
+# snapshot can fall back to obsolete MSYS2 package URLs that now return HTTP 404.
+find_program(NASM NAMES nasm nasm.exe REQUIRED)
+get_filename_component(NASM_EXE_PATH "${NASM}" DIRECTORY)
+vcpkg_add_to_path("${NASM_EXE_PATH}")
 
-# Use Strawberry Perl installed by the GitHub Actions workflow.
-# Do not call vcpkg_find_acquire_program(PERL): the old vcpkg snapshot
-# may try to download an obsolete MSYS2 package whose mirror is gone.
-if(VCPKG_TARGET_IS_WINDOWS)
-    set(PERL "C:/Strawberry/perl/bin/perl.exe")
-    if(NOT EXISTS "${PERL}")
-        message(FATAL_ERROR "Strawberry Perl was not found at ${PERL}")
-    endif()
-else()
-    vcpkg_find_acquire_program(PERL)
-endif()
+# Perl is required to build AOM.
+# Use Strawberry Perl from PATH for the same reason: do not let this old vcpkg
+# snapshot enter its obsolete MSYS2 acquisition path.
+find_program(PERL NAMES perl perl.exe REQUIRED)
 get_filename_component(PERL_PATH "${PERL}" DIRECTORY)
 vcpkg_add_to_path("${PERL_PATH}")
 

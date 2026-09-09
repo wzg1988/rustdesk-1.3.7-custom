@@ -17,7 +17,6 @@ env:
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
   TAG_NAME: "${{ inputs.upload-tag }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  # RustDesk 1.3.7 uses vcpkg 2024.11.16
   VCPKG_COMMIT_ID: "b2cb0da531c2f1f740045bfe7c4dac59f0b2b69c"
   VERSION: "1.3.7"
   RS_PUB_KEY: "${{ secrets.KEY }}"
@@ -98,10 +97,6 @@ jobs:
     name: Windows x64
     needs: [generate-bridge, build-RustDeskTempTopMostWindow]
     runs-on: windows-2022
-    env:
-      VCPKG_DEFAULT_TRIPLET: x64-windows-static
-      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
-
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -139,7 +134,7 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
           Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
           $enginePath = "C:\hostedtoolcache\windows\flutter\stable-${{ env.FLUTTER_VERSION }}-x64\bin\cache\artifacts\engine\windows-x64-release"
-          Copy-Item -Force -Recurse windows-x64-release\* $enginePath
+          Move-Item -Force windows-x64-release\* $enginePath
 
       - name: Patch Flutter
         shell: bash
@@ -165,18 +160,26 @@ jobs:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
 
+      # Keep this exactly aligned with RustDesk 1.3.7 upstream.
+      # Do NOT set VCPKG_DEFAULT_TRIPLET globally: the target triplet is passed
+      # explicitly below. The host triplet must also be Windows static, otherwise
+      # host builds can select incompatible ports/tooling.
       - name: Install vcpkg dependencies
-        shell: bash
         env:
-          VCPKG_DEFAULT_TRIPLET: x64-windows-static
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        shell: bash
         run: |
-          if ! "$VCPKG_ROOT/vcpkg" \
+          if ! $VCPKG_ROOT/vcpkg \
             install \
             --triplet x64-windows-static \
             --x-install-root="$VCPKG_ROOT/installed"; then
-            echo "========== vcpkg build logs =========="
-            find "${VCPKG_ROOT}/buildtrees" -type f -name "*.log" -print -exec sh -c 'echo "========== $1 =========="; cat "$1"' _ {} \;
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r f; do
+              echo "$f:"
+              echo "======"
+              cat "$f"
+              echo "======"
+              echo ""
+            done
             exit 1
           fi
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-x64-windows-static-rel-out.log" || true
@@ -184,12 +187,11 @@ jobs:
       - name: Build RustDesk Windows x64
         shell: powershell
         run: |
-          $ErrorActionPreference = "Stop"
           Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
           Expand-Archive usbmmidd_v2.zip -DestinationPath .
           python .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
-          Remove-Item -Path usbmmidd_v2\Win32 -Recurse -ErrorAction SilentlyContinue
-          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat" -ErrorAction SilentlyContinue
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
           Move-Item ./flutter/build/windows/x64/runner/Release ./rustdesk
           Move-Item -Force .\usbmmidd_v2 ./rustdesk
 
@@ -197,7 +199,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          runner_res=$(find . -name "Runner.res" | head -n 1)
+          runner_res=$(find . -name "Runner.res")
           if [ "$runner_res" != "" ]; then
             cp "$runner_res" ./libs/portable/Runner.res
           fi
@@ -241,7 +243,6 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         shell: powershell
         run: |
-          $ErrorActionPreference = "Stop"
           Push-Location ./res/msi
           python preprocess.py --arp -d ../../rustdesk
           nuget restore msi.sln

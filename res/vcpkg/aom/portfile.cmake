@@ -3,10 +3,19 @@ vcpkg_find_acquire_program(NASM)
 get_filename_component(NASM_EXE_PATH ${NASM} DIRECTORY)
 vcpkg_add_to_path(${NASM_EXE_PATH})
 
-# Perl is required to build AOM
-vcpkg_find_acquire_program(PERL)
-get_filename_component(PERL_PATH ${PERL} DIRECTORY)
-vcpkg_add_to_path(${PERL_PATH})
+# Use Strawberry Perl installed by the GitHub Actions workflow.
+# Do not call vcpkg_find_acquire_program(PERL): the old vcpkg snapshot
+# may try to download an obsolete MSYS2 package whose mirror is gone.
+if(VCPKG_TARGET_IS_WINDOWS)
+    set(PERL "C:/Strawberry/perl/bin/perl.exe")
+    if(NOT EXISTS "${PERL}")
+        message(FATAL_ERROR "Strawberry Perl was not found at ${PERL}")
+    endif()
+else()
+    vcpkg_find_acquire_program(PERL)
+endif()
+get_filename_component(PERL_PATH "${PERL}" DIRECTORY)
+vcpkg_add_to_path("${PERL_PATH}")
 
 if(DEFINED ENV{USE_AOM_391})
     vcpkg_from_git(
@@ -58,7 +67,6 @@ vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 
 vcpkg_fixup_pkgconfig()
-
 if(VCPKG_TARGET_IS_WINDOWS)
   vcpkg_replace_string("${CURRENT_PACKAGES_DIR}/lib/pkgconfig/aom.pc" " -lm" "")
   if(NOT VCPKG_BUILD_TYPE)

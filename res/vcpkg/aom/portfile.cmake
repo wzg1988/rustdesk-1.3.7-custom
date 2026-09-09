@@ -1,15 +1,38 @@
 # NASM is required to build AOM.
-# Use the Windows-native NASM installed by the GitHub Actions workflow instead
-# of vcpkg_find_acquire_program(), because the RustDesk 1.3.7 pinned vcpkg
-# snapshot can fall back to obsolete MSYS2 package URLs that now return HTTP 404.
-find_program(NASM NAMES nasm nasm.exe REQUIRED)
+#
+# The GitHub Actions workflow installs NASM through Chocolatey. Chocolatey may
+# install the package successfully without refreshing PATH for the process that
+# later runs vcpkg, so search the Chocolatey shim directory explicitly.
+set(_aom_choco_bin "C:/ProgramData/chocolatey/bin")
+if(DEFINED ENV{ChocolateyInstall} AND NOT "$ENV{ChocolateyInstall}" STREQUAL "")
+    list(PREPEND _aom_choco_bin "$ENV{ChocolateyInstall}/bin")
+endif()
+
+find_program(NASM
+    NAMES nasm.exe nasm
+    HINTS ${_aom_choco_bin}
+    PATH_SUFFIXES bin
+    REQUIRED
+)
 get_filename_component(NASM_EXE_PATH "${NASM}" DIRECTORY)
 vcpkg_add_to_path("${NASM_EXE_PATH}")
 
 # Perl is required to build AOM.
-# Use Strawberry Perl from PATH for the same reason: do not let this old vcpkg
-# snapshot enter its obsolete MSYS2 acquisition path.
-find_program(PERL NAMES perl perl.exe REQUIRED)
+# Prefer the native Strawberry Perl installed by the workflow and explicitly
+# search both its normal location and Chocolatey's shim directory. This avoids
+# vcpkg's old MSYS2 acquisition path, whose pinned MSYS2 package URLs return
+# HTTP 404.
+set(_aom_perl_hints
+    "C:/Strawberry/perl/bin"
+    "C:/Strawberry/c/bin"
+    ${_aom_choco_bin}
+)
+find_program(PERL
+    NAMES perl.exe perl
+    HINTS ${_aom_perl_hints}
+    PATH_SUFFIXES bin
+    REQUIRED
+)
 get_filename_component(PERL_PATH "${PERL}" DIRECTORY)
 vcpkg_add_to_path("${PERL_PATH}")
 

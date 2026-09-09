@@ -153,42 +153,54 @@ jobs:
         with:
           prefix-key: windows-2022-x64
 
-      # The pinned vcpkg snapshot used by RustDesk 1.3.7 may try to
-      # download MSYS2 Perl when Perl is absent. Some MSYS mirrors now return
-      # 404 for the old runtime package, which is the actual fatal error seen
-      # in the previous logs. Install native runner tools first so the AOM
-      # portfile finds them locally and does not download MSYS2.
-      - name: Install vcpkg build prerequisites
+      # RustDesk 1.3.7's pinned vcpkg snapshot can try to download an old
+      # MSYS2 Perl package. Those old mirror URLs now return HTTP 404.
+      # Install a native Windows Perl instead.
+      - name: Install native Perl and NASM
         shell: powershell
         run: |
-          choco install nasm strawberryperl -y --no-progress
+          choco install strawberryperl nasm -y --no-progress
+          $perlDir = "C:\Strawberry\perl\bin"
+          if (!(Test-Path "$perlDir\perl.exe")) {
+            throw "Strawberry Perl was not installed correctly."
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $perlDir
           Add-Content -Path $env:GITHUB_PATH -Value "C:\ProgramData\chocolatey\bin"
-          Add-Content -Path $env:GITHUB_PATH -Value "C:\Strawberry\perl\bin"
+          $env:Path = "$perlDir;$env:Path"
+          & "$perlDir\perl.exe" -v
 
-      # RustDesk 1.3.7 uses an overlay AOM port. The old vcpkg helper can
-      # decide to acquire its own Perl/MSYS2 even when a native Perl is already
-      # installed, and that acquisition now hits stale MSYS2 packages (HTTP 404).
-      # Force the overlay port to use the Perl installed above.
-      - name: Force AOM overlay to use native Perl
+      # The RustDesk 1.3.7 AOM overlay normally asks vcpkg to acquire Perl.
+      # Replace that helper call with CMake's normal PATH lookup so vcpkg never
+      # enters its obsolete MSYS2 acquisition path.
+      - name: Patch AOM overlay to use native Perl
         shell: powershell
         run: |
-          $perl = (Get-Command perl.exe -ErrorAction Stop).Source.Replace('\', '/')
-          Write-Host "Using native Perl: $perl"
-          & $perl -v
           $portfile = Join-Path $env:GITHUB_WORKSPACE "res\vcpkg\aom\portfile.cmake"
           if (!(Test-Path $portfile)) {
             throw "RustDesk AOM overlay portfile was not found: $portfile"
           }
-          $content = Get-Content $portfile -Raw
-          $needle = 'vcpkg_find_acquire_program(PERL)'
-          if ($content -notmatch [regex]::Escape($needle)) {
-            throw "Expected Perl acquisition line was not found in $portfile"
-          }
-          $replacement = 'set(PERL "' + $perl + '")'
-          $content = $content.Replace($needle, $replacement)
-          Set-Content -Path $portfile -Value $content -NoNewline
-          Write-Host "Patched AOM overlay portfile to use native Perl."
 
+          $content = Get-Content -Path $portfile -Raw
+          $oldBlock = @'
+          vcpkg_find_acquire_program(PERL)
+          get_filename_component(PERL_PATH ${PERL} DIRECTORY)
+          vcpkg_add_to_path(${PERL_PATH})
+          '@
+          $newBlock = @'
+          find_program(PERL NAMES perl perl.exe REQUIRED)
+          get_filename_component(PERL_PATH "${PERL}" DIRECTORY)
+          vcpkg_add_to_path("${PERL_PATH}")
+          '@
+
+          if ($content.Contains($oldBlock)) {
+            $content = $content.Replace($oldBlock, $newBlock)
+          } elseif ($content -notmatch 'find_program\(PERL') {
+            throw "Expected Perl acquisition block was not found in $portfile"
+          }
+
+          Set-Content -Path $portfile -Value $content -NoNewline
+          Get-Content -Path $portfile | Select-Object -First 12
+          Write-Host "AOM overlay patched to use native Perl."
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
